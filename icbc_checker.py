@@ -33,10 +33,6 @@ GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 TO_EMAIL = os.environ.get("TO_EMAIL", "sahmednabipour@gmail.com")
 
-# TEMP TEST VALUE: widened to Dec 8, 2026 to confirm the full pipeline
-# (scrape -> parse -> email) actually works, since we know from an earlier
-# inspection that a slot exists on that date. Change back to July 28, 2026
-# once you've confirmed you got the test email.
 CUTOFF_DATE = datetime(2026, 7, 28)
 
 LOCATIONS = [
@@ -68,8 +64,9 @@ def send_email(subject: str, body: str) -> None:
 # Core check
 # ---------------------------------------------------------------------------
 
-def check_slots() -> list[str]:
+def check_slots():
     found = []
+    soonest_overall = None  # (appt_date, date_text, location)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -106,7 +103,10 @@ def check_slots() -> list[str]:
         # --- Check each location ------------------------------------------
         for location in LOCATIONS:
             try:
-                found.extend(check_location(page, location))
+                slots, earliest = check_location(page, location)
+                found.extend(slots)
+                if earliest and (soonest_overall is None or earliest[0] < soonest_overall[0]):
+                    soonest_overall = (earliest[0], earliest[1], location)
             except PWTimeout as e:
                 print(f"Could not load/check location: {location}")
                 print(f"  -> {e}")
@@ -116,15 +116,19 @@ def check_slots() -> list[str]:
 
         browser.close()
 
-    return found
+    return found, soonest_overall
 
 
-def check_location(page, location: str) -> list[str]:
+def check_location(page, location: str):
     """Search for one location by name and scrape any dates/times shown
     in the "Dates and times" dialog that opens. Every date shown there
-    is an open slot, ICBC doesn't show unavailable dates in this view."""
+    is an open slot, ICBC doesn't show unavailable dates in this view.
+    Returns (slots_before_cutoff, earliest_seen) where earliest_seen is
+    (appt_date, date_text) for the soonest date shown, regardless of
+    whether it's within the cutoff."""
 
     slots_found = []
+    earliest = None
 
     # Switch to the "By office" search tab (harmless if already selected)
     page.get_by_text(re.compile("by office", re.I)).click()
@@ -153,7 +157,11 @@ def check_location(page, location: str) -> list[str]:
     for i in range(count):
         date_text = date_titles.nth(i).inner_text().strip()
         appt_date = parse_date(date_text)
-        if appt_date and appt_date <= CUTOFF_DATE:
+        if appt_date is None:
+            continue
+        if earliest is None or appt_date < earliest[0]:
+            earliest = (appt_date, date_text)
+        if appt_date <= CUTOFF_DATE:
             slots_found.append(f"{location}: {date_text}")
 
     # Close the dialog so the next location search starts clean
@@ -162,7 +170,7 @@ def check_location(page, location: str) -> list[str]:
     except PWTimeout:
         pass
 
-    return slots_found
+    return slots_found, earliest
 
 
 _ORDINAL_RE = re.compile(r"(\d+)(st|nd|rd|th)", re.I)
@@ -188,7 +196,7 @@ def parse_date(text: str):
 
 def main():
     try:
-        slots = check_slots()
+        slots, soonest = check_slots()
     except Exception as e:
         print(f"Error during check: {e}")
         # Don't email on every transient error, just log it so the
@@ -202,8 +210,11 @@ def main():
         send_email("ICBC appointment slot available", body)
         print("Found slot(s), email sent:")
         print("\n".join(slots))
+    elif soonest:
+        appt_date, date_text, location = soonest
+        print(f"No slots before {CUTOFF_DATE.date()}. Soonest available: {location}: {date_text}")
     else:
-        print(f"No slots before {CUTOFF_DATE.date()} as of {datetime.now()}.")
+        print(f"No slots before {CUTOFF_DATE.date()}, and couldn't read any dates at all this run.")
 
 
 if __name__ == "__main__":
