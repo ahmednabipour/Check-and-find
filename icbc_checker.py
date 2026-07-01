@@ -40,10 +40,10 @@ LOCATIONS = [
     "Burnaby Driver Licensing",
 ]
 
-# ADJUST ME: confirm this is the right starting URL for your login
-# (likely https://www.icbc.com or https://my.icbc.com, check what
-# you land on when you sign in manually).
-LOGIN_URL = "https://www.icbc.com/sign-in"
+# ADJUST ME: confirm this is the right starting URL for your login by
+# manually going to icbc.com, clicking "Sign in to My ICBC", and copying
+# whatever URL you actually land on.
+LOGIN_URL = "https://my.icbc.com"
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +70,7 @@ def check_slots() -> list[str]:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(LOGIN_URL, wait_until="networkidle")
+        page.goto(LOGIN_URL, wait_until="load", timeout=60000)
 
         # --- LOGIN -----------------------------------------------------
         # ADJUST ME: these field labels must match what's actually on
@@ -80,7 +80,7 @@ def check_slots() -> list[str]:
         page.get_by_label(re.compile("licence number|license number", re.I)).fill(LICENSE_NUMBER)
         page.get_by_label(re.compile("keyword", re.I)).fill(KEYWORD)
         page.get_by_role("button", name=re.compile("sign in|log in", re.I)).click()
-        page.wait_for_load_state("networkidle")
+        page.wait_for_load_state("load", timeout=15000)
 
         # --- RESCHEDULE --------------------------------------------------
         page.get_by_role("button", name=re.compile("reschedule", re.I)).click()
@@ -91,7 +91,7 @@ def check_slots() -> list[str]:
             page.get_by_role("button", name=re.compile(r"^yes$", re.I)).click(timeout=5000)
         except PWTimeout:
             pass  # no confirmation dialog appeared, fine
-        page.wait_for_load_state("networkidle")
+        page.wait_for_load_state("load", timeout=15000)
 
         # --- Check each location ------------------------------------------
         for location in LOCATIONS:
@@ -113,7 +113,7 @@ def check_slots() -> list[str]:
                         found.append(f"{location}: {text}")
 
                 page.go_back()
-                page.wait_for_load_state("networkidle")
+                page.wait_for_load_state("load", timeout=15000)
             except PWTimeout:
                 print(f"Could not load/check location: {location}")
                 continue
