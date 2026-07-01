@@ -73,12 +73,18 @@ def check_slots() -> list[str]:
         page.goto(LOGIN_URL, wait_until="load", timeout=60000)
 
         # --- LOGIN -----------------------------------------------------
-        # ADJUST ME: these field labels must match what's actually on
-        # the sign-in form. Use get_by_label where possible, it's the
-        # most resilient option (survives CSS/ID changes).
-        page.get_by_label(re.compile("last name", re.I)).fill(LAST_NAME)
-        page.get_by_label(re.compile("licence number|license number", re.I)).fill(LICENSE_NUMBER)
-        page.get_by_label(re.compile("keyword", re.I)).fill(KEYWORD)
+        # These selectors target Angular's formcontrolname attribute,
+        # which is the most stable way to grab fields in this app since
+        # the visible labels aren't wired to real <label> elements.
+        page.locator('[formcontrolname="drvrLastName"]').fill(LAST_NAME)
+        page.locator('[formcontrolname="licenceNumber"]').fill(LICENSE_NUMBER)
+        page.locator('[formcontrolname="keyword"]').fill(KEYWORD)
+
+        # The "I have read and agree" checkbox must be ticked or the
+        # Sign in button stays disabled. It's an Angular Material
+        # checkbox, click the visible inner container rather than the
+        # hidden native input.
+        page.locator('.mat-checkbox-inner-container').first.click()
         page.get_by_role("button", name=re.compile("sign in|log in", re.I)).click()
         page.wait_for_load_state("load", timeout=15000)
 
