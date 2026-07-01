@@ -126,7 +126,7 @@ def check_location(page, location: str) -> list[str]:
     page.get_by_text(re.compile("by office", re.I)).click()
     page.wait_for_timeout(500)
 
-    search_input = page.locator('[formcontrolname="finishedAutocomplete"]')
+    search_input = page.get_by_placeholder("Start typing...")
     search_input.fill("")
     search_input.fill(location)
     page.wait_for_timeout(1000)
