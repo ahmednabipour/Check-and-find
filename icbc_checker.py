@@ -66,7 +66,7 @@ def send_email(subject: str, body: str) -> None:
 
 def check_slots():
     found = []
-    soonest_overall = None  # (appt_date, date_text, location)
+    soonest_by_location = {}  # location -> (appt_date, date_text) or None
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -105,18 +105,18 @@ def check_slots():
             try:
                 slots, earliest = check_location(page, location)
                 found.extend(slots)
-                if earliest and (soonest_overall is None or earliest[0] < soonest_overall[0]):
-                    soonest_overall = (earliest[0], earliest[1], location)
+                soonest_by_location[location] = earliest  # (appt_date, date_text) or None
             except PWTimeout as e:
                 print(f"Could not load/check location: {location}")
                 print(f"  -> {e}")
                 safe_name = re.sub(r"[^a-zA-Z0-9]+", "_", location)
                 page.screenshot(path=f"debug_{safe_name}.png", full_page=True)
+                soonest_by_location[location] = None
                 continue
 
         browser.close()
 
-    return found, soonest_overall
+    return found, soonest_by_location
 
 
 def check_location(page, location: str):
@@ -196,7 +196,7 @@ def parse_date(text: str):
 
 def main():
     try:
-        slots, soonest = check_slots()
+        slots, soonest_by_location = check_slots()
     except Exception as e:
         print(f"Error during check: {e}")
         # Don't email on every transient error, just log it so the
@@ -210,11 +210,14 @@ def main():
         send_email("ICBC appointment slot available", body)
         print("Found slot(s), email sent:")
         print("\n".join(slots))
-    elif soonest:
-        appt_date, date_text, location = soonest
-        print(f"No slots before {CUTOFF_DATE.date()}. Soonest available: {location}: {date_text}")
     else:
-        print(f"No slots before {CUTOFF_DATE.date()}, and couldn't read any dates at all this run.")
+        print(f"No slots before {CUTOFF_DATE.date()}. Soonest available per location:")
+        for location, earliest in soonest_by_location.items():
+            if earliest:
+                _, date_text = earliest
+                print(f"  {location}: {date_text}")
+            else:
+                print(f"  {location}: couldn't read any dates this run")
 
 
 if __name__ == "__main__":
