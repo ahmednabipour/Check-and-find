@@ -33,7 +33,11 @@ GMAIL_USER = os.environ["GMAIL_USER"]
 GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 TO_EMAIL = os.environ.get("TO_EMAIL", "sahmednabipour@gmail.com")
 
-CUTOFF_DATE = datetime(2026, 7, 28)
+# TEMP TEST VALUE: widened to Dec 8, 2026 to confirm the full pipeline
+# (scrape -> parse -> email) actually works, since we know from an earlier
+# inspection that a slot exists on that date. Change back to July 28, 2026
+# once you've confirmed you got the test email.
+CUTOFF_DATE = datetime(2026, 12, 8)
 
 LOCATIONS = [
     "Burnaby claim centre (Wayburne Drive)",
