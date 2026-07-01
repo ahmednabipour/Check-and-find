@@ -103,8 +103,11 @@ def check_slots() -> list[str]:
         for location in LOCATIONS:
             try:
                 found.extend(check_location(page, location))
-            except PWTimeout:
+            except PWTimeout as e:
                 print(f"Could not load/check location: {location}")
+                print(f"  -> {e}")
+                safe_name = re.sub(r"[^a-zA-Z0-9]+", "_", location)
+                page.screenshot(path=f"debug_{safe_name}.png", full_page=True)
                 continue
 
         browser.close()
