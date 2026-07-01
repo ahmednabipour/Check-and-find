@@ -36,8 +36,8 @@ TO_EMAIL = os.environ.get("TO_EMAIL", "sahmednabipour@gmail.com")
 CUTOFF_DATE = datetime(2026, 7, 28)
 
 LOCATIONS = [
-    "Burnaby Claim Centre - Wayburne Drive",
-    "Burnaby Driver Licensing",
+    "Burnaby claim centre (Wayburne Drive)",
+    "Burnaby driver licensing",
 ]
 
 # This is ICBC's road test / appointment booking system, which is separate
@@ -102,24 +102,7 @@ def check_slots() -> list[str]:
         # --- Check each location ------------------------------------------
         for location in LOCATIONS:
             try:
-                page.get_by_text(location, exact=False).first.click()
-                page.wait_for_timeout(2000)
-
-                # ADJUST ME: this selector needs to match whatever element
-                # wraps each bookable date/time on the calendar/list view.
-                # Open dev tools on the real page, right-click an available
-                # slot, "Inspect", and copy a stable selector here.
-                slot_elements = page.locator("[data-testid='available-date'], .available-slot, .available-date")
-                count = slot_elements.count()
-
-                for i in range(count):
-                    text = slot_elements.nth(i).inner_text().strip()
-                    appt_date = parse_date(text)
-                    if appt_date and appt_date <= CUTOFF_DATE:
-                        found.append(f"{location}: {text}")
-
-                page.go_back()
-                page.wait_for_load_state("load", timeout=15000)
+                found.extend(check_location(page, location))
             except PWTimeout:
                 print(f"Could not load/check location: {location}")
                 continue
@@ -129,8 +112,61 @@ def check_slots() -> list[str]:
     return found
 
 
+def check_location(page, location: str) -> list[str]:
+    """Search for one location by name and scrape any dates/times shown
+    in the "Dates and times" dialog that opens. Every date shown there
+    is an open slot, ICBC doesn't show unavailable dates in this view."""
+
+    slots_found = []
+
+    # Switch to the "By office" search tab (harmless if already selected)
+    page.get_by_text(re.compile("by office", re.I)).click()
+    page.wait_for_timeout(500)
+
+    search_input = page.locator('[formcontrolname="finishedAutocomplete"]')
+    search_input.fill("")
+    search_input.fill(location)
+    page.wait_for_timeout(1000)
+
+    # An autocomplete suggestion must be clicked, not just typed, or the
+    # Search button stays disabled. Target the suggestion text directly.
+    page.locator('.mat-option-text', has_text=location).first.click(timeout=8000)
+
+    page.get_by_role("button", name=re.compile(r"^search$", re.I)).click()
+    page.wait_for_timeout(1500)
+
+    # Click into the matching result to open the "Dates and times" dialog
+    page.get_by_text(location, exact=False).first.click()
+    page.wait_for_timeout(1500)
+
+    dialog = page.locator("mat-dialog-container")
+    date_titles = dialog.locator(".date-title")
+    count = date_titles.count()
+
+    for i in range(count):
+        date_text = date_titles.nth(i).inner_text().strip()
+        appt_date = parse_date(date_text)
+        if appt_date and appt_date <= CUTOFF_DATE:
+            slots_found.append(f"{location}: {date_text}")
+
+    # Close the dialog so the next location search starts clean
+    try:
+        dialog.get_by_text("Cancel", exact=True).click(timeout=3000)
+    except PWTimeout:
+        pass
+
+    return slots_found
+
+
+_ORDINAL_RE = re.compile(r"(\d+)(st|nd|rd|th)", re.I)
+_WEEKDAY_PREFIX_RE = re.compile(r"^[A-Za-z]+,\s*")
+
+
 def parse_date(text: str):
-    """Try a few common date formats since we don't know the exact one yet."""
+    """Parses dates like 'Monday, December 7th, 2026'."""
+    text = text.strip()
+    text = _WEEKDAY_PREFIX_RE.sub("", text)      # drop "Monday, "
+    text = _ORDINAL_RE.sub(r"\1", text)           # "7th" -> "7"
     for fmt in ("%B %d, %Y", "%b %d, %Y", "%Y-%m-%d", "%m/%d/%Y"):
         try:
             return datetime.strptime(text, fmt)
