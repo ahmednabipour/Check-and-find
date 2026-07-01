@@ -2,11 +2,13 @@ name: Check ICBC appointment slots
 
 on:
   schedule:
-    # Every hour, on the hour. Adjust if you want more/less frequent
-    # checks, but keep an eye on your GitHub Actions free-tier minutes
-    # if this repo is private (2,000 min/month free). Public repos get
-    # unlimited minutes.
-    - cron: '0 * * * *'
+    # Fires every 5 minutes, but the "decide" step below only lets ONE
+    # of the 6 slots in each 30-minute window (:00-:25 or :30-:55)
+    # actually run the real check. Which slot gets picked is randomized
+    # per window, so there's no fixed pattern, while still totalling
+    # 48 real checks/day. The 5 "skipped" runs per window exit in a
+    # few seconds and barely cost any Actions minutes.
+    - cron: '*/5 * * * *'
   workflow_dispatch: {}  # lets you trigger a manual run from the Actions tab
 
 jobs:
@@ -14,18 +16,43 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - id: decide
+        name: Decide whether this 5-minute slot is the chosen one
+        run: |
+          python3 - << 'PYEOF'
+          import random, datetime, os
 
-      - uses: actions/setup-python@v5
+          now = datetime.datetime.utcnow()
+          half_hour_start = 0 if now.minute < 30 else 30
+          seed = f"{now.date()}-{now.hour}-{half_hour_start}"
+
+          rng = random.Random(seed)
+          chosen_slot = rng.randrange(6)  # one of 0..5, i.e. +0/5/10/15/20/25 min
+          current_slot = (now.minute - half_hour_start) // 5
+
+          should_run = "true" if current_slot == chosen_slot else "false"
+          print(f"window={seed} chosen_slot={chosen_slot} current_slot={current_slot} should_run={should_run}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"run={should_run}\n")
+          PYEOF
+
+      - if: steps.decide.outputs.run == 'true'
+        uses: actions/checkout@v4
+
+      - if: steps.decide.outputs.run == 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
+        if: steps.decide.outputs.run == 'true'
         run: |
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
       - name: Run checker
+        if: steps.decide.outputs.run == 'true'
         env:
           ICBC_LASTNAME: ${{ secrets.ICBC_LASTNAME }}
           ICBC_LICENSE: ${{ secrets.ICBC_LICENSE }}
@@ -36,7 +63,7 @@ jobs:
         run: python icbc_checker.py
 
       - name: Upload debug screenshots
-        if: always()
+        if: steps.decide.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: debug-screenshots
