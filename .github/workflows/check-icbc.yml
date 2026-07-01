@@ -18,20 +18,29 @@ jobs:
     steps:
       - id: decide
         name: Decide whether this 5-minute slot is the chosen one
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           python3 - << 'PYEOF'
           import random, datetime, os
 
-          now = datetime.datetime.utcnow()
-          half_hour_start = 0 if now.minute < 30 else 30
-          seed = f"{now.date()}-{now.hour}-{half_hour_start}"
+          event_name = os.environ.get("EVENT_NAME", "")
+          if event_name == "workflow_dispatch":
+              # Manual runs always execute for real, no point gating a
+              # run you explicitly asked for.
+              should_run = "true"
+              print("Manually triggered, running for real.")
+          else:
+              now = datetime.datetime.utcnow()
+              half_hour_start = 0 if now.minute < 30 else 30
+              seed = f"{now.date()}-{now.hour}-{half_hour_start}"
 
-          rng = random.Random(seed)
-          chosen_slot = rng.randrange(6)  # one of 0..5, i.e. +0/5/10/15/20/25 min
-          current_slot = (now.minute - half_hour_start) // 5
+              rng = random.Random(seed)
+              chosen_slot = rng.randrange(6)  # one of 0..5, i.e. +0/5/10/15/20/25 min
+              current_slot = (now.minute - half_hour_start) // 5
 
-          should_run = "true" if current_slot == chosen_slot else "false"
-          print(f"window={seed} chosen_slot={chosen_slot} current_slot={current_slot} should_run={should_run}")
+              should_run = "true" if current_slot == chosen_slot else "false"
+              print(f"window={seed} chosen_slot={chosen_slot} current_slot={current_slot} should_run={should_run}")
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"run={should_run}\n")
