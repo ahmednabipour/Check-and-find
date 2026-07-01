@@ -2,63 +2,70 @@ name: Check ICBC appointment slots
 
 on:
   schedule:
-    # Fires every 5 minutes, but the "decide" step below only lets ONE
-    # of the 6 slots in each 30-minute window (:00-:25 or :30-:55)
-    # actually run the real check. Which slot gets picked is randomized
-    # per window, so there's no fixed pattern, while still totalling
-    # 48 real checks/day. The 5 "skipped" runs per window exit in a
-    # few seconds and barely cost any Actions minutes.
+    # Fires as often as GitHub allows (5 min minimum), but the actual
+    # real check only happens if 15+ minutes have passed since the last
+    # one (tracked in .state/last_run.txt, committed back to the repo).
+    # No randomness, just a minimum-gap gate. How far apart real checks
+    # actually land depends on GitHub's own scheduling delays.
     - cron: '*/5 * * * *'
   workflow_dispatch: {}  # lets you trigger a manual run from the Actions tab
+
+permissions:
+  contents: write  # needed to commit the last-run timestamp back to the repo
+
+concurrency:
+  group: icbc-checker
+  cancel-in-progress: false  # never run two checks at once
 
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+
       - id: decide
-        name: Decide whether this 5-minute slot is the chosen one
+        name: Decide whether enough time has passed since the last real run
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           python3 - << 'PYEOF'
-          import random, datetime, os
+          import datetime, os
           from zoneinfo import ZoneInfo
 
           event_name = os.environ.get("EVENT_NAME", "")
           local_now = datetime.datetime.now(ZoneInfo("America/Vancouver"))
           in_blackout = datetime.time(0, 30) <= local_now.time() < datetime.time(5, 30)
 
+          STATE_FILE = ".state/last_run.txt"
+          MIN_GAP_MINUTES = 15
+
           if event_name == "workflow_dispatch":
               # Manual runs always execute for real, no point gating a
               # run you explicitly asked for, even during the blackout.
-              should_run = "true"
+              should_run = True
               print("Manually triggered, running for real.")
           elif in_blackout:
-              should_run = "false"
+              should_run = False
               print(f"In overnight blackout window (local time {local_now.strftime('%H:%M')}), skipping.")
+          elif not os.path.exists(STATE_FILE):
+              should_run = True
+              print("No last-run record found, this is the first run.")
           else:
-              now = datetime.datetime.utcnow()
-              half_hour_start = 0 if now.minute < 30 else 30
-              seed = f"{now.date()}-{now.hour}-{half_hour_start}"
-
-              rng = random.Random(seed)
-              chosen_slot = rng.randrange(6)  # one of 0..5, i.e. +0/5/10/15/20/25 min
-              current_slot = (now.minute - half_hour_start) // 5
-
-              should_run = "true" if current_slot == chosen_slot else "false"
-              print(f"window={seed} chosen_slot={chosen_slot} current_slot={current_slot} should_run={should_run}")
+              with open(STATE_FILE) as f:
+                  last_run = datetime.datetime.fromisoformat(f.read().strip())
+              now_utc = datetime.datetime.now(datetime.timezone.utc)
+              elapsed_minutes = (now_utc - last_run).total_seconds() / 60
+              should_run = elapsed_minutes >= MIN_GAP_MINUTES
+              print(f"Last real run: {last_run.isoformat()} ({elapsed_minutes:.1f} min ago). should_run={should_run}")
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"run={should_run}\n")
+              f.write(f"run={'true' if should_run else 'false'}\n")
           PYEOF
 
       - name: Skip notice
         if: steps.decide.outputs.run != 'true'
         run: echo "it was a skip run"
-
-      - if: steps.decide.outputs.run == 'true'
-        uses: actions/checkout@v4
 
       - if: steps.decide.outputs.run == 'true'
         uses: actions/setup-python@v5
@@ -81,6 +88,18 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TO_EMAIL: sahmednabipour@gmail.com
         run: python icbc_checker.py
+
+      - name: Record this run's timestamp
+        if: always() && steps.decide.outputs.run == 'true'
+        run: |
+          mkdir -p .state
+          date -u +"%Y-%m-%dT%H:%M:%S+00:00" > .state/last_run.txt
+          git config user.name "icbc-checker-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add .state/last_run.txt
+          git commit -m "chore: record last run timestamp" || echo "Nothing to commit"
+          git pull --rebase
+          git push
 
       - name: Upload debug screenshots
         if: steps.decide.outputs.run == 'true'
