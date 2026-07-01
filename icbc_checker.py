@@ -40,10 +40,10 @@ LOCATIONS = [
     "Burnaby Driver Licensing",
 ]
 
-# ADJUST ME: confirm this is the right starting URL for your login by
-# manually going to icbc.com, clicking "Sign in to My ICBC", and copying
-# whatever URL you actually land on.
-LOGIN_URL = "https://my.icbc.com"
+# This is ICBC's road test / appointment booking system, which is separate
+# from the newer "My ICBC" account portal, and is what actually uses
+# last name + licence number + keyword to log in.
+LOGIN_URL = "https://onlinebusiness.icbc.com/webdeas-ui/login;type=driver"
 
 
 # ---------------------------------------------------------------------------
