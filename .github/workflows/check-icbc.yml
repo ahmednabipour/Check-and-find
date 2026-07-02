@@ -2,12 +2,14 @@ name: Check ICBC appointment slots
 
 on:
   schedule:
-    # Fires as often as GitHub allows (5 min minimum), but the actual
-    # real check only happens if 15+ minutes have passed since the last
-    # one (tracked in .state/last_run.txt, committed back to the repo).
-    # No randomness, just a minimum-gap gate. How far apart real checks
-    # actually land depends on GitHub's own scheduling delays.
-    - cron: '*/5 * * * *'
+    # Hourly backup only, in case the external trigger (see README,
+    # "External trigger setup") is ever down. The real cadence comes
+    # from repository_dispatch, called by a free external cron service
+    # every 5 minutes, since GitHub's own schedule trigger is unreliable
+    # at that frequency.
+    - cron: '0 * * * *'
+  repository_dispatch:
+    types: [check-icbc]
   workflow_dispatch: {}  # lets you trigger a manual run from the Actions tab
 
 permissions:
