@@ -2,64 +2,107 @@ name: Check ICBC appointment slots
 
 on:
   schedule:
-    # Hourly backup only, in case the external trigger (see README,
-    # "External trigger setup") is ever down. The real cadence comes
-    # from repository_dispatch, called by a free external cron service
-    # every 5 minutes, since GitHub's own schedule trigger is unreliable
-    # at that frequency.
+    # Hourly backup only, in case the external trigger is ever down.
     - cron: '0 * * * *'
   repository_dispatch:
     types: [check-icbc]
   workflow_dispatch: {}  # lets you trigger a manual run from the Actions tab
+
+permissions:
+  contents: write  # needed to commit the schedule array/pointer back to the repo
+
+concurrency:
+  group: icbc-checker
+  cancel-in-progress: false  # never process two calls out of order
 
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
+
       - id: decide
-        name: Decide whether this 5-minute slot is the chosen one
+        name: Consume next slot from the schedule array
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
           python3 - << 'PYEOF'
-          import random, datetime, os
+          import json, os, random, datetime
           from zoneinfo import ZoneInfo
+
+          STATE_FILE = ".state/schedule.json"
+          ARRAY_LENGTH = 1980  # must be a multiple of 6
 
           event_name = os.environ.get("EVENT_NAME", "")
           local_now = datetime.datetime.now(ZoneInfo("America/Vancouver"))
           in_blackout = datetime.time(0, 30) <= local_now.time() < datetime.time(5, 30)
 
+          def generate_array(n):
+              # Every consecutive group of 6 has exactly one 1, the rest 0s.
+              # Each entry represents one incoming API call, in order.
+              arr = []
+              for _ in range(n // 6):
+                  group = [0, 0, 0, 0, 0, 0]
+                  group[random.randrange(6)] = 1
+                  arr.extend(group)
+              return arr
+
+          os.makedirs(".state", exist_ok=True)
+
           if event_name == "workflow_dispatch":
-              # Manual runs always execute for real, no point gating a
-              # run you explicitly asked for, even during the blackout.
-              should_run = "true"
-              print("Manually triggered, running for real.")
-          elif in_blackout:
-              should_run = "false"
-              print(f"In overnight blackout window (local time {local_now.strftime('%H:%M')}), skipping.")
+              # Manual runs always execute for real and don't consume a
+              # slot from the array, they're outside the normal sequence.
+              should_run = True
+              print("Manually triggered, running for real (array untouched).")
           else:
-              now = datetime.datetime.utcnow()
-              half_hour_start = 0 if now.minute < 30 else 30
-              seed = f"{now.date()}-{now.hour}-{half_hour_start}"
+              if os.path.exists(STATE_FILE):
+                  with open(STATE_FILE) as f:
+                      state = json.load(f)
+              else:
+                  state = {"array": generate_array(ARRAY_LENGTH), "index": 0}
+                  print(f"No schedule file found, generated a fresh {ARRAY_LENGTH}-slot array.")
 
-              rng = random.Random(seed)
-              chosen_slot = rng.randrange(6)  # one of 0..5, i.e. +0/5/10/15/20/25 min
-              current_slot = (now.minute - half_hour_start) // 5
+              index = state["index"]
+              array = state["array"]
+              value = array[index]
 
-              should_run = "true" if current_slot == chosen_slot else "false"
-              print(f"window={seed} chosen_slot={chosen_slot} current_slot={current_slot} should_run={should_run}")
+              should_run = (value == 1) and not in_blackout
+
+              if in_blackout:
+                  print(f"Slot {index} value={value}, but in overnight blackout (local {local_now.strftime('%H:%M')}), skipping.")
+              else:
+                  print(f"Slot {index} of {len(array)}: value={value} -> should_run={should_run}")
+
+              # Advance the pointer for next time, regardless of run/skip
+              state["index"] = index + 1
+              if state["index"] >= len(array):
+                  # Completed a full pass, generate a fresh randomized
+                  # array so the pattern doesn't repeat identically.
+                  state["array"] = generate_array(ARRAY_LENGTH)
+                  state["index"] = 0
+                  print("Reached end of array, generated a new one for the next cycle.")
+
+              with open(STATE_FILE, "w") as f:
+                  json.dump(state, f)
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"run={should_run}\n")
+              f.write(f"run={'true' if should_run else 'false'}\n")
           PYEOF
+
+      - name: Commit updated schedule pointer
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          git config user.name "icbc-checker-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add .state/schedule.json
+          git commit -m "chore: advance schedule pointer" || echo "Nothing to commit"
+          git pull --rebase
+          git push
 
       - name: Skip notice
         if: steps.decide.outputs.run != 'true'
         run: echo "it was a skip run"
-
-      - if: steps.decide.outputs.run == 'true'
-        uses: actions/checkout@v4
 
       - if: steps.decide.outputs.run == 'true'
         uses: actions/setup-python@v5
